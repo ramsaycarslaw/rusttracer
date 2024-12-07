@@ -1,60 +1,56 @@
 mod aabb;
-use crate::scene::Object;
-use aabb::AABB;
+pub use aabb::AABB;
 
-pub struct BVHNode {
-    pub bounding_box: AABB,
-    pub left: Option<Box<BVHNode>>,
-    pub right: Option<Box<BVHNode>>,
-    pub object: Option<Object>,
+#[derive(Clone, Copy)]
+pub struct Ray {
+    pub origin: [f32; 3],
+    pub direction: [f32; 3],
 }
 
-impl BVHNode {
-    pub fn new(objects: &mut [Object]) -> Self {
-        if objects.len() == 1 {
-            let bounding_box = Self::calculate_aabb(&objects[0]);
-            return BVHNode {
-                bounding_box,
-                left: None,
-                right: None,
-                object: Some(objects[0].clone()),
-            };
-        }
-
-        // Sort along X-axis for simplicity
-        objects.sort_by(|a, b| {
-            Self::calculate_aabb(a).min[0]
-                .partial_cmp(&Self::calculate_aabb(b).min[0])
-                .unwrap()
-        });
-
-        let mid = objects.len() / 2;
-        let (left_objects, right_objects) = objects.split_at_mut(mid);
-
-        let left = Box::new(BVHNode::new(left_objects));
-        let right = Box::new(BVHNode::new(right_objects));
-
-        BVHNode {
-            bounding_box: AABB::merge(&left.bounding_box, &right.bounding_box),
-            left: Some(left),
-            right: Some(right),
-            object: None,
+impl Ray {
+    pub fn new(origin: [f32; 3], direction: [f32; 3]) -> Self {
+        let norm = (direction[0].powi(2) + direction[1].powi(2) + direction[2].powi(2)).sqrt();
+        Self {
+            origin,
+            direction: [direction[0] / norm, direction[1] / norm, direction[2] / norm],
         }
     }
+}
 
-    fn calculate_aabb(object: &Object) -> AABB {
-        match object {
-            Object::Sphere { position, radius, .. } => {
-                let r = *radius;
-                AABB {
-                    min: [position[0] - r, position[1] - r, position[2] - r],
-                    max: [position[0] + r, position[1] + r, position[2] + r],
-                }
+pub fn render(scene: &crate::scene::Scene, width: usize, height: usize) -> Vec<u8> {
+    let mut buffer = vec![0; width * height * 3];
+
+    let camera = &scene.camera;
+    let fov_scale = (camera.fov.to_radians() / 2.0).tan();
+
+    for y in 0..height {
+        for x in 0..width {
+            let ndc_x = (x as f32 + 0.5) / width as f32 * 2.0 - 1.0;
+            let ndc_y = 1.0 - (y as f32 + 0.5) / height as f32 * 2.0;
+
+            let ray_dir = [
+                ndc_x * fov_scale * width as f32 / height as f32,
+                ndc_y * fov_scale,
+                -1.0,
+            ];
+            let ray = Ray::new(camera.position, ray_dir);
+
+            let intersects = scene.objects.iter().any(|obj| obj.intersects(&ray));
+
+            let offset = (y * width + x) * 3;
+            if intersects {
+                buffer[offset + 2] = 255; // Blue
             }
-            Object::Plane { .. } => AABB {
-                min: [f32::NEG_INFINITY; 3],
-                max: [f32::INFINITY; 3],
-            },
         }
     }
+
+    buffer
+}
+
+use image::{ImageBuffer, Rgb};
+
+pub fn save_image(buffer: &[u8], width: usize, height: usize, filename: &str) {
+    let img = ImageBuffer::<Rgb<u8>, _>::from_raw(width as u32, height as u32, buffer.to_vec())
+        .expect("Failed to create image buffer");
+    img.save(filename).expect("Failed to save image");
 }
